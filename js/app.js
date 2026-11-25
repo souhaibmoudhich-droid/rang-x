@@ -66,6 +66,7 @@
     if (!(opts && opts.quiet)) checkRankUp(before, ev);
     render();
     for (const l of layers) if (l.refresh) l.refresh();
+    if (!(opts && opts.fromSync)) autoSync(2000);
   }
   function setRecord(metric, value, src) {
     const def = S.METRICS[metric];
@@ -365,6 +366,7 @@
         .sort((a, b) => (lbDir(lbCat) > 0 ? b.v - a.v : a.v - b.v));
       const missing = people.filter((p) => val(p) == null);
       const lg = state.league;
+      const pending = leaguePending();
       return `
         <section class="card">
           <div class="card-head"><div><div class="eyebrow">Toi et tes amis</div><h2>Classement</h2></div><span class="small muted">${people.length} athlète${people.length > 1 ? 's' : ''}</span></div>
@@ -382,6 +384,7 @@
         <section class="card">
           <div class="card-head"><h2>Ligue en ligne</h2><span class="small muted">optionnel</span></div>
           ${lg.url && lg.code ? `<p class="small muted">Ligue <b>${esc(lg.code)}</b>${lg.last ? ` · synchronisée le ${new Date(lg.last).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : ''}. Tout le monde voit les mises à jour sans s'échanger de code.</p>
+            ${pending ? `<p class="small" data-sync-status>${navigator.onLine === false ? 'Hors ligne : tes nouveaux records sont gardés sur le téléphone et partiront dès le retour du réseau.' : 'Nouveaux records en attente d\'envoi…'}</p>` : ''}
             <div class="btn-row"><button class="btn primary" data-act="sync">Synchroniser</button><button class="btn" data-act="league">Réglages</button></div>`
           : `<p class="small muted">Avec une base Firebase gratuite, le classement se met à jour tout seul pour toute la bande. Sans ça, les codes de partage suffisent.</p><button class="btn" data-act="league">Configurer</button>`}
         </section>`;
@@ -982,7 +985,7 @@
     L.el.addEventListener('click', (e) => {
       if (e.target.closest('[data-act="lg-off"]')) {
         e.stopPropagation();
-        commit(() => { state.league = { url: '', code: '', members: [], last: 0 }; }, { quiet: true });
+        commit(() => { state.league = { url: '', code: '', members: [], last: 0 }; }, { quiet: true, fromSync: true });
         closeLayer(L); return;
       }
       if (!e.target.closest('[data-act="lg-save"]')) return;
@@ -990,22 +993,78 @@
       const url = $('#lg-url', L.el).value.trim(), code = $('#lg-code', L.el).value.trim();
       if (!So.validDbUrl(url)) { toast('Adresse invalide : elle doit finir par firebaseio.com ou firebasedatabase.app'); return; }
       if (!So.validLeague(code)) { toast('Code de ligue : 3 à 32 lettres, chiffres, - ou _'); return; }
-      commit(() => { state.league.url = url; state.league.code = code; }, { quiet: true });
+      commit(() => {
+        if (url !== state.league.url || code !== state.league.code) { state.league.sig = ''; state.league.sent = null; }
+        state.league.url = url; state.league.code = code;
+      }, { quiet: true, fromSync: true });
       closeLayer(L);
       syncLeague();
     });
   }
-  async function syncLeague() {
+  // ——— Ligue : synchro automatique ———
+  // Les records battus hors ligne restent sur le téléphone ; dès que le réseau revient (ou à la
+  // prochaine ouverture de l'app), la fiche est renvoyée à la ligue en gardant le meilleur score.
+  const cardSig = (c) => JSON.stringify(Object.assign({}, c, { t: 0 }));
+  function leaguePending() {
     const lg = state.league;
-    if (!lg.url || !lg.code) return;
-    toast('Synchronisation…');
-    try {
-      const members = await So.syncLeague(lg.url, lg.code, So.card(state, ev));
-      commit(() => { state.league.members = members.filter((m) => m.id !== state.id); state.league.last = Date.now(); }, { quiet: true });
-      toast(`Ligue à jour : ${members.length} athlète${members.length > 1 ? 's' : ''}`);
-    } catch (e) {
-      toast(e && e.message ? e.message : 'Synchronisation impossible');
-    }
+    return !!(lg.url && lg.code && ev && cardSig(So.card(state, ev)) !== lg.sig);
+  }
+  let syncing = null, syncTimer = 0, retryDelay = 0;
+  function autoSync(delay) {
+    clearTimeout(syncTimer);
+    if (!leaguePending()) return;
+    syncTimer = setTimeout(() => {
+      if (navigator.onLine === false) return; // l'événement « online » relancera la synchro
+      syncLeague({ auto: true });
+    }, delay);
+  }
+  function syncLeague(opts) {
+    const auto = !!(opts && opts.auto);
+    const lg = state.league;
+    if (!lg.url || !lg.code || !ev) return Promise.resolve(false);
+    if (syncing) return syncing;
+    if (!auto) toast('Synchronisation…');
+    const wasPending = leaguePending();
+    syncing = (async () => {
+      try {
+        let merged = state.records, xp = state.xp || 0, gained = [];
+        const res = await So.syncLeague(lg.url, lg.code, state.id, (own) => {
+          if (own) {
+            const m = So.mergeRecords(state.records, own.r, lg.sent);
+            merged = m.records; gained = m.gained; xp = Math.max(xp, own.xp || 0);
+          }
+          const c = So.card(Object.assign({}, state, { records: merged, xp }), S.evaluate(state.profile, merged));
+          if (own) c.b = Math.max(c.b, own.b || 0);
+          return c;
+        });
+        commit(() => {
+          for (const k of gained) {
+            if (merged[k] !== state.records[k]) { state.records[k] = merged[k]; state.history.push({ t: Date.now(), m: k, v: merged[k], src: 'ligue' }); }
+          }
+          state.xp = Math.max(state.xp || 0, xp);
+          state.league.members = res.members.filter((m) => m.id !== state.id);
+          state.league.last = Date.now();
+          state.league.sent = Object.assign({}, res.card.r);
+          state.league.sig = cardSig(So.card(state, S.evaluate(state.profile, state.records)));
+        }, { quiet: true, fromSync: true });
+        retryDelay = 0;
+        const n = res.members.length;
+        if (gained.length) toast(`Meilleur score récupéré de la ligue : ${gained.map((k) => S.METRICS[k].short).join(', ')}`);
+        else if (!auto) toast(`Ligue à jour : ${n} athlète${n > 1 ? 's' : ''}`);
+        else if (wasPending) toast('Records hors ligne envoyés à la ligue');
+        return true;
+      } catch (e) {
+        if (!auto) toast(e && e.message ? e.message : 'Synchronisation impossible');
+        // nouvel essai plus tard : 30 s, 1 min, 2 min… jusqu'à 15 min
+        retryDelay = Math.min(15 * 60e3, retryDelay ? retryDelay * 2 : 30e3);
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => { if (navigator.onLine !== false) syncLeague({ auto: true }); }, retryDelay);
+        return false;
+      } finally {
+        syncing = null;
+      }
+    })();
+    return syncing;
   }
 
   // ——— Profil & tests ———
@@ -1169,7 +1228,7 @@
           if (!s || s.v !== 1 || !s.profile) throw new Error('bad');
           state = Object.assign(blank(), s); save(); recompute();
           while (layers.length) closeLayer();
-          render(); toast('Sauvegarde restaurée');
+          render(); toast('Sauvegarde restaurée'); autoSync(1500);
         } catch (err) { toast('Sauvegarde illisible'); }
       }
     });
@@ -1291,6 +1350,10 @@
     if (!PREVIEW && 'serviceWorker' in navigator && /^https:|^http:\/\/localhost/.test(location.href)) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
+    window.addEventListener('online', () => { retryDelay = 0; autoSync(500); if (tab === 'classement') render(); });
+    window.addEventListener('offline', () => { if (tab === 'classement') render(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoSync(1000); });
+    autoSync(1500);
     window.addEventListener('hashchange', () => {
       const x = (location.hash || '').slice(1);
       if (TABS.some(([id]) => id === x) && x !== tab) { tab = x; render(); }

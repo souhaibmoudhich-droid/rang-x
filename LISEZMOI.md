@@ -67,6 +67,20 @@ Si tu ne veux plus t'échanger de codes, crée une base Firebase gratuite :
 
 Toute personne qui connaît l'adresse et le code peut lire la ligue : n'y mets que ton pseudo, pas ton vrai nom complet.
 
+### Records battus hors ligne
+
+Tu peux t'entraîner sans réseau : chaque record est gardé sur ton téléphone. Une fois la ligue configurée, l'app envoie toute seule tes nouveaux records :
+
+- dès que le réseau revient pendant que l'app est ouverte ;
+- sinon, à la prochaine ouverture de l'app (ou quand tu y reviens) ;
+- si la base ne répond pas, elle réessaie toute seule, de plus en plus espacé (30 s, 1 min, 2 min… jusqu'à 15 min).
+
+Dans **Classement → Ligue en ligne**, un message indique quand des records attendent d'être envoyés. Le bouton **Synchroniser** reste là pour forcer l'envoi.
+
+**Règle du meilleur score** : avant d'envoyer, l'app compare ta fiche en ligne et celle du téléphone, et garde pour chaque exercice la meilleure valeur (le plus de reps ou de kilos, le temps le plus court). Un record moins bon ne remplace donc jamais un meilleur. Si la ligue a un meilleur record que ton téléphone (par exemple après une restauration de sauvegarde), il est récupéré. Seule exception : si tu corriges toi-même un record à la baisse dans ton profil, ta correction est respectée.
+
+Rien à installer ni à créer en plus : la synchro passe par la même base Firebase gratuite, avec les mêmes règles. Sans ligue en ligne, tes records restent sur le téléphone et partent avec ton prochain code de partage.
+
 ## 4. Bien utiliser la caméra
 
 | Exercice | Placement du téléphone |
@@ -112,3 +126,4 @@ Le programme suit un cycle de 4 semaines (100 %, 102,5 %, 105 %, puis décharge)
 - `index.html`, `css/`, `js/` : l'application.
 - `vendor/mediapipe/` : la détection de posture MediaPipe (Google, licence Apache 2.0) et son modèle, inclus pour que l'app marche sans dépendre d'un autre site.
 - `sw.js`, `manifest.webmanifest`, `icons/` : installation sur le téléphone et mode hors ligne.
+- `tests/` : tests de la règle du meilleur score (`node --test tests/*.test.js`, Node 18 ou plus). Ce dossier n'est pas utile sur le site.

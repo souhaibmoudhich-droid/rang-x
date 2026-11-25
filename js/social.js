@@ -58,18 +58,39 @@
   }
   const validLeague = (c) => /^[A-Za-z0-9_-]{3,32}$/.test(c || '');
 
-  async function syncLeague(dbUrl, league, myCard) {
+  const better = (k, a, b) => (S.METRICS[k].dir > 0 ? a > b : a < b);
+
+  // Règle du meilleur score : garde, pour chaque record, la meilleure valeur entre le téléphone et la ligue.
+  // `sent` = records envoyés lors de la dernière synchro réussie : si la ligue n'a que cette valeur,
+  // c'est que l'athlète l'a corrigée à la baisse sur ce téléphone, on ne la réimpose donc pas.
+  function mergeRecords(local, remote, sent) {
+    const records = Object.assign({}, local || {});
+    const gained = [];
+    for (const k of REC_KEYS) {
+      const r = remote && remote[k], l = records[k];
+      if (!(r > 0) || (sent && sent[k] === r)) continue;
+      if (!(l > 0) || better(k, r, l)) { records[k] = r; gained.push(k); }
+    }
+    return { records, gained };
+  }
+
+  // Lit la ligue, laisse l'app fusionner sa propre fiche (makeCard reçoit la version en ligne, ou null),
+  // puis envoie la fiche fusionnée. Rien n'est écrit dans l'app tant que l'envoi n'a pas réussi.
+  async function syncLeague(dbUrl, league, id, makeCard) {
     const base = validDbUrl(dbUrl);
     if (!base) throw new Error('Adresse de base invalide (elle doit finir par firebaseio.com ou firebasedatabase.app)');
     if (!validLeague(league)) throw new Error('Code de ligue invalide : 3 à 32 lettres, chiffres, - ou _');
     const path = `${base}/ligues/${encodeURIComponent(league)}`;
+    const res = await fetch(`${path}.json`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? 'Accès refusé : vérifie les règles de ta base (voir le guide)' : `Lecture impossible (${res.status})`);
+    const data = (await res.json()) || {};
+    const members = Object.values(data).map(sanitize).filter(Boolean);
+    const own = members.find((m) => m.id === id) || null;
+    const myCard = makeCard(own);
     const put = await fetch(`${path}/${myCard.id}.json`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(myCard) });
     if (!put.ok) throw new Error(put.status === 401 || put.status === 403 ? 'Accès refusé : vérifie les règles de ta base (voir le guide)' : `Erreur serveur (${put.status})`);
-    const res = await fetch(`${path}.json`);
-    if (!res.ok) throw new Error(`Lecture impossible (${res.status})`);
-    const data = (await res.json()) || {};
-    return Object.values(data).map(sanitize).filter(Boolean);
+    return { members: members.filter((m) => m.id !== id).concat([myCard]), own, card: myCard };
   }
 
-  RX.Social = { card, encode, decode, sanitize, syncLeague, validDbUrl, validLeague, REC_KEYS };
+  RX.Social = { card, encode, decode, sanitize, mergeRecords, syncLeague, validDbUrl, validLeague, REC_KEYS };
 })(window.RX = window.RX || {});
