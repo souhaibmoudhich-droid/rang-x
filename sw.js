@@ -1,5 +1,5 @@
 /* Rang X — service worker : l'app fonctionne hors ligne après la première visite. */
-const VERSION = 'rangx-v1';
+const VERSION = 'rangx-v2';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/standards.js', 'js/program.js', 'js/bosses.js', 'js/pose.js',
   'js/run.js', 'js/social.js', 'js/app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon.svg'];
 
